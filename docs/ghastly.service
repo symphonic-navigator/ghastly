@@ -1,0 +1,11 @@
+[Unit]
+Description=ghastly GitHub Actions watcher
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/ghastly
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

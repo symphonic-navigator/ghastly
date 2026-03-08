@@ -1,0 +1,8 @@
+post_install() {
+    echo "ghastly installed. Run 'ghastly init' to configure your GitHub PAT and first repository."
+    echo "Tip: secure your config file after init: chmod 600 ~/.config/ghastly/config.toml"
+}
+
+post_upgrade() {
+    echo "ghastly upgraded to $(pacman -Q ghastly | awk '{print $2}')"
+}
