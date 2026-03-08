@@ -88,7 +88,7 @@ class DetailPanel(Widget):
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("escape", "close", "Close"),
+        Binding("escape", "close", "Close", priority=True),
         Binding("o", "open_browser", "Open in browser"),
     ]
 

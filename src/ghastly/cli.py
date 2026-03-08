@@ -182,6 +182,13 @@ def add(
         )
         raise typer.Exit(1)
 
+    from .config import load_config
+
+    existing = load_config(CONFIG_PATH)
+    if any(r.url.rstrip("/") == repo.url.rstrip("/") for r in existing.repos):
+        typer.echo(f"Repository already in watch list: {repo.url}", err=True)
+        raise typer.Exit(1)
+
     append_repo_to_config(repo, CONFIG_PATH)
     typer.echo(f"Added {repo.alias} ({repo.url}) to config.")
     typer.echo("If ghastly is running, the new repo will appear automatically.")
