@@ -21,7 +21,7 @@ from textual.widgets import Footer, Header, Label, Static
 from .api import GitHubClient, PollResult, RateLimitInfo, RunData
 from .config import CONFIG_PATH, Config, RepoConfig, load_config
 from .notifications import notify, urgency_for_status
-from .widgets.detail_panel import DetailPanel
+from .widgets.detail_panel import DetailPanel, DetailScreen
 from .widgets.filter_bar import FilterBar, matches
 from .widgets.group_header import GroupHeader, aggregate_status
 from .widgets.repo_row import RepoRow
@@ -154,14 +154,14 @@ _HELP_TEXT = """\
 │   g            Toggle group view            │
 │   s            Cycle sort order             │
 │   /            Open filter                  │
-│   Shift+R      Force refresh                │
+│   r            Force refresh                │
 │   ?            This help                    │
 │                                             │
 │ On selected row                             │
 │   Enter / l    Open build detail            │
 │   o            Open run in browser          │
-│   r            Re-run failed jobs           │
-│   Shift+R      Re-run entire workflow       │
+│   R            Re-run failed jobs           │
+│   Ctrl+R       Re-run entire workflow       │
 │                                             │
 │   Press Esc or ? to close                  │
 └─────────────────────────────────────────────┘\
@@ -245,7 +245,7 @@ class GhastlyApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("q", "quit", "Quit"),
-        Binding("R", "refresh_all", "Refresh"),
+        Binding("r", "refresh_all", "Refresh"),
         Binding("?", "show_help", "Help"),
         Binding("g", "toggle_group", "Group", show=False),
         Binding("s", "cycle_sort", "Sort", show=False),
@@ -258,8 +258,8 @@ class GhastlyApp(App[None]):
         Binding("right", "expand_or_open", "Open/expand", show=False),
         Binding("h", "collapse_or_close", "Close/collapse", show=False),
         Binding("left", "collapse_or_close", "Close/collapse", show=False),
-        Binding("r", "rerun_failed", "Rerun failed", show=False),
-        Binding("R", "rerun_all_prompt", "Rerun all", show=False),
+        Binding("R", "rerun_failed", "Rerun failed", show=False),
+        Binding("ctrl+r", "rerun_all_prompt", "Rerun all", show=False),
         Binding("o", "open_browser", "Open", show=False),
     ]
 
@@ -317,11 +317,22 @@ class GhastlyApp(App[None]):
     # Mount
     # ------------------------------------------------------------------ #
 
+    def watch_theme(self, theme: str) -> None:
+        """Persist theme changes to config."""
+        if theme != self._config.display.theme:
+            from .config import config_to_dict, write_config
+
+            self._config.display.theme = theme
+            write_config(config_to_dict(self._config), self._config_path)
+
     async def on_mount(self) -> None:
         from .config import DATA_DIR, LOG_PATH
 
         _setup_logging(self._config.log_level, LOG_PATH)
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Apply saved theme before anything else
+        self.theme = self._config.display.theme
 
         self._client = GitHubClient(self._config.auth.pat)
         await self._client.__aenter__()
@@ -562,32 +573,28 @@ class GhastlyApp(App[None]):
         await self._open_detail(row.repo, run)
 
     async def _open_detail(self, repo: RepoConfig, run: RunData) -> None:
-        """Mount the detail panel in the appropriate layout mode."""
+        """Open the detail panel in the appropriate layout mode."""
         if self._client is None:
             return
 
         split = self._should_use_split()
         self._split_mode = split
 
-        panel = DetailPanel(
-            client=self._client,
-            repo=repo,
-            run=run,
-            split_mode=split,
-            id="detail-panel",
-        )
-        self._detail_panel = panel
-
         if split:
-            # Mount beside the repo list inside the horizontal main area
+            panel = DetailPanel(
+                client=self._client,
+                repo=repo,
+                run=run,
+                id="detail-panel",
+            )
+            self._detail_panel = panel
             main_area = self.query_one("#main-area", Horizontal)
             repo_list = self.query_one("#repo-list", VerticalScroll)
-            # Narrow the repo list to roughly half width
             repo_list.styles.width = "1fr"
             await main_area.mount(panel)
         else:
-            # Modal overlay — mount at screen level
-            await self.mount(panel)
+            # True modal — push onto the screen stack so it captures all input
+            await self.push_screen(DetailScreen(self._client, repo, run))
 
     async def _close_detail(self) -> None:
         """Remove the detail panel and restore layout."""
@@ -605,9 +612,8 @@ class GhastlyApp(App[None]):
         await self._detail_panel.remove()
         self._detail_panel = None
 
-    async def on_detail_panel_close(self, _message: DetailPanel.Close) -> None:
-        """Dismiss the detail panel."""
-        await self._close_detail()
+    # DetailPanel.Close is no longer used in modal mode (DetailScreen dismisses itself).
+    # Kept as a no-op for split mode compatibility if ever needed.
 
     # ------------------------------------------------------------------ #
     # Group view

@@ -194,6 +194,148 @@ def add(
     typer.echo("If ghastly is running, the new repo will appear automatically.")
 
 
+@app.command(name="list")
+def list_repos() -> None:
+    """List all watched repositories with their indices."""
+    from .config import CONFIG_PATH, load_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True)
+        raise typer.Exit(1)
+
+    config = load_config(CONFIG_PATH)
+    if not config.repos:
+        typer.echo("No repositories configured.")
+        return
+
+    # Column widths
+    w_alias = max(len(r.alias or r.repo) for r in config.repos)
+    w_key = max(len(r.key) for r in config.repos)
+    w_group = max(len(r.group or "default") for r in config.repos)
+
+    header = f"  {'#':>3}  {'alias':<{w_alias}}  {'repo':<{w_key}}  {'group':<{w_group}}  branch"
+    typer.echo(header)
+    typer.echo("  " + "-" * (len(header) - 2))
+
+    for idx, repo in enumerate(config.repos):
+        alias = repo.alias or repo.repo
+        group = repo.group or "default"
+        branch = repo.watch_branch or "(default)"
+        typer.echo(f"  {idx:>3}  {alias:<{w_alias}}  {repo.key:<{w_key}}  {group:<{w_group}}  {branch}")
+
+
+def _resolve_repo_key(identifier: str) -> str | None:
+    """Resolve an index, URL, or owner/repo string to a repo key. Returns None if not found."""
+    from .config import CONFIG_PATH, load_config
+
+    config = load_config(CONFIG_PATH)
+
+    # Try as integer index
+    try:
+        idx = int(identifier)
+        if 0 <= idx < len(config.repos):
+            return config.repos[idx].key
+        return None
+    except ValueError:
+        pass
+
+    # Try as full URL
+    url = identifier.rstrip("/")
+    for repo in config.repos:
+        if repo.url.rstrip("/") == url:
+            return repo.key
+
+    # Try as owner/repo key
+    for repo in config.repos:
+        if repo.key == identifier:
+            return repo.key
+
+    return None
+
+
+@app.command()
+def delete(
+    identifier: Annotated[str, typer.Argument(help="Index, URL, or owner/repo of the repo to remove")],
+) -> None:
+    """Remove a repository from the watch list."""
+    from .config import CONFIG_PATH, remove_repo_from_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True)
+        raise typer.Exit(1)
+
+    key = _resolve_repo_key(identifier)
+    if key is None:
+        typer.echo(f"Repository not found: {identifier}", err=True)
+        raise typer.Exit(1)
+
+    remove_repo_from_config(key, CONFIG_PATH)
+    typer.echo(f"Removed {key} from config.")
+    typer.echo("If ghastly is running, the repo will disappear automatically.")
+
+
+@app.command(name="set-group")
+def set_group(
+    identifier: Annotated[str, typer.Argument(help="Index, URL, or owner/repo")],
+    group: Annotated[str, typer.Argument(help="Group name")],
+) -> None:
+    """Set the group of a watched repository."""
+    from .config import CONFIG_PATH, update_repo_in_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True)
+        raise typer.Exit(1)
+
+    key = _resolve_repo_key(identifier)
+    if key is None:
+        typer.echo(f"Repository not found: {identifier}", err=True)
+        raise typer.Exit(1)
+
+    update_repo_in_config(key, {"group": group}, CONFIG_PATH)
+    typer.echo(f"Set group of {key} to '{group}'.")
+
+
+@app.command(name="unset-group")
+def unset_group(
+    identifier: Annotated[str, typer.Argument(help="Index, URL, or owner/repo")],
+) -> None:
+    """Remove a repository from its group (resets to 'default')."""
+    from .config import CONFIG_PATH, update_repo_in_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True)
+        raise typer.Exit(1)
+
+    key = _resolve_repo_key(identifier)
+    if key is None:
+        typer.echo(f"Repository not found: {identifier}", err=True)
+        raise typer.Exit(1)
+
+    update_repo_in_config(key, {"group": "default"}, CONFIG_PATH)
+    typer.echo(f"Removed {key} from its group (now in 'default').")
+
+
+@app.command(name="alias")
+def set_alias(
+    identifier: Annotated[str, typer.Argument(help="Index, URL, or owner/repo")],
+    name: Annotated[str, typer.Argument(help="New alias")],
+) -> None:
+    """Set the display alias of a watched repository."""
+    from .config import CONFIG_PATH, update_repo_in_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True)
+        raise typer.Exit(1)
+
+    key = _resolve_repo_key(identifier)
+    if key is None:
+        typer.echo(f"Repository not found: {identifier}", err=True)
+        raise typer.Exit(1)
+
+    update_repo_in_config(key, {"alias": name}, CONFIG_PATH)
+    typer.echo(f"Alias of {key} set to '{name}'.")
+
+
 async def _validate_pat(pat: str) -> str | None:
     """Call GET /user to validate the PAT. Returns login name or None."""
     import httpx

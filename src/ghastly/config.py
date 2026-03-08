@@ -63,6 +63,7 @@ class DisplayConfig:
 
     detail_layout: str = "auto"  # "auto" | "modal" | "split"
     poll_interval: int = 60
+    theme: str = "textual-dark"
 
 
 @dataclass
@@ -109,6 +110,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     display = DisplayConfig(
         detail_layout=display_raw.get("detail_layout", "auto"),
         poll_interval=int(display_raw.get("poll_interval", 60)),
+        theme=display_raw.get("theme", "textual-dark"),
     )
 
     # Notifications — optional with defaults
@@ -167,6 +169,7 @@ def write_config(config_data: dict[str, object], path: Path = CONFIG_PATH) -> No
         lines.append("[display]")
         lines.append(f'detail_layout = "{display.get("detail_layout", "auto")}"')
         lines.append(f'poll_interval = {display.get("poll_interval", 60)}')
+        lines.append(f'theme = "{display.get("theme", "textual-dark")}"')
         lines.append("")
 
     # [notifications]
@@ -227,3 +230,64 @@ def append_repo_to_config(
         fh.write("\n".join(lines) + "\n")
 
     logger.info("Appended repo %s to config", repo.url)
+
+
+def config_to_dict(config: "Config") -> dict[str, object]:
+    """Serialise a Config object to a dict suitable for write_config."""
+    repos: list[dict[str, object]] = []
+    for repo in config.repos:
+        entry: dict[str, object] = {"url": repo.url}
+        if repo.alias and repo.alias != repo.repo:
+            entry["alias"] = repo.alias
+        if repo.group:
+            entry["group"] = repo.group
+        if repo.watch_branch:
+            entry["watch_branch"] = repo.watch_branch
+        entry["artifact_hint"] = repo.artifact_hint
+        repos.append(entry)
+
+    return {
+        "auth": {"pat": config.auth.pat},
+        "display": {
+            "detail_layout": config.display.detail_layout,
+            "poll_interval": config.display.poll_interval,
+            "theme": config.display.theme,
+        },
+        "notifications": {
+            "on_success": config.notifications.on_success,
+            "on_failure": config.notifications.on_failure,
+            "on_cancelled": config.notifications.on_cancelled,
+            "system_notify": config.notifications.system_notify,
+        },
+        "repos": repos,
+    }
+
+
+def update_repo_in_config(
+    key: str,
+    updates: dict[str, object],
+    path: Path = CONFIG_PATH,
+) -> bool:
+    """Load config, apply field updates to the repo identified by key, write back.
+
+    Returns True if the repo was found and updated.
+    """
+    config = load_config(path)
+    for repo in config.repos:
+        if repo.key == key:
+            for attr, value in updates.items():
+                setattr(repo, attr, value)
+            write_config(config_to_dict(config), path)
+            return True
+    return False
+
+
+def remove_repo_from_config(key: str, path: Path = CONFIG_PATH) -> bool:
+    """Remove the repo identified by key from the config. Returns True if found."""
+    config = load_config(path)
+    original_count = len(config.repos)
+    config.repos = [r for r in config.repos if r.key != key]
+    if len(config.repos) == original_count:
+        return False
+    write_config(config_to_dict(config), path)
+    return True
