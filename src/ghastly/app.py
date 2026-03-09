@@ -92,6 +92,7 @@ class StatusBar(Static):
     rate_limit: reactive[RateLimitInfo | None] = reactive(None)
     offline: reactive[bool] = reactive(False)
     sort_mode: reactive[SortMode] = reactive(SortMode.LAST_RUN)
+    location: reactive[str] = reactive("list")
 
     def compose(self) -> ComposeResult:
         yield Label("", id="sb-left")
@@ -120,6 +121,7 @@ class StatusBar(Static):
 
         left_parts.append(f"{self.repo_count} repos")
         left_parts.append(f"sort: {_SORT_LABELS[self.sort_mode]}")
+        left_parts.append(self.location)
 
         right_parts: list[str] = []
         if self.rate_limit and self.rate_limit.remaining >= 0:
@@ -140,32 +142,43 @@ class StatusBar(Static):
 # ------------------------------------------------------------------ #
 
 _HELP_TEXT = """\
-┌─────────────────────────────────────────────┐
-│              ghastly — keybindings          │
-├─────────────────────────────────────────────┤
-│ Navigation                                  │
-│   ↑ / k        Move up                      │
-│   ↓ / j        Move down                    │
-│   ← / h        Collapse group / close detail│
-│   → / l        Expand group / open detail   │
-│                                             │
-│ Global                                      │
-│   q            Quit                         │
-│   g            Toggle group view            │
-│   s            Cycle sort order             │
-│   /            Open filter                  │
-│   r            Force refresh                │
-│   ?            This help                    │
-│                                             │
-│ On selected row                             │
-│   Enter / l    Open build detail            │
-│   o            Open run in browser          │
-│   R            Re-run failed jobs           │
-│   Ctrl+R       Re-run entire workflow       │
-│   C            Clear cache for repo         │
-│                                             │
-│   Press Esc or ? to close                  │
-└─────────────────────────────────────────────┘\
+┌──────────────────────────────────────────────────────┐
+│               ghastly — keybindings                  │
+├──────────────────────────────────────────────────────┤
+│ Navigation                                           │
+│   ↑ / k          Move up                            │
+│   ↓ / j          Move down                          │
+│   → / l          Expand group / open detail         │
+│   ← / h          Collapse group                     │
+│   Shift+→ / L    Focus detail panel                 │
+│   Shift+← / H    Focus back to list                 │
+│                                                      │
+│ Global                                               │
+│   q              Quit                               │
+│   g              Toggle group view                  │
+│   s              Cycle sort order                   │
+│   /              Open filter                        │
+│   r              Force refresh                      │
+│   Esc            Close detail panel                 │
+│   ?              This help                          │
+│                                                      │
+│ On selected row                                      │
+│   Enter / l      Open build detail                  │
+│   o              Open run in browser                │
+│   R              Re-run failed jobs (this build)    │
+│   Ctrl+R         Re-run entire workflow             │
+│   C              Clear cache for this repo          │
+│   Ctrl+C         Clear all caches                   │
+│                                                      │
+│ In detail panel                                      │
+│   c              Copy ref to clipboard              │
+│   t              Copy tag / version to clipboard     │
+│   o              Open run in browser                │
+│   Shift+← / H    Focus back to list                 │
+│   Esc            Close detail panel                 │
+│                                                      │
+│   Press Esc or ? to close                           │
+└──────────────────────────────────────────────────────┘\
 """
 
 
@@ -248,6 +261,7 @@ class GhastlyApp(App[None]):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh_all", "Refresh"),
         Binding("?", "show_help", "Help"),
+        Binding("escape", "close_detail", "Close detail", show=False),
         Binding("g", "toggle_group", "Group", show=False),
         Binding("s", "cycle_sort", "Sort", show=False),
         Binding("slash", "open_filter", "Filter", show=False),
@@ -259,10 +273,17 @@ class GhastlyApp(App[None]):
         Binding("right", "expand_or_open", "Open/expand", show=False),
         Binding("h", "collapse_or_close", "Close/collapse", show=False),
         Binding("left", "collapse_or_close", "Close/collapse", show=False),
+        Binding("shift+left", "focus_list", "Focus list", show=False, priority=True),
+        Binding("H", "focus_list", "Focus list", show=False, priority=True),
+        Binding("shift+right", "focus_detail", "Focus detail", show=False, priority=True),
+        Binding("L", "focus_detail", "Focus detail", show=False, priority=True),
         Binding("R", "rerun_failed", "Rerun failed", show=False),
         Binding("ctrl+r", "rerun_all_prompt", "Rerun all", show=False),
         Binding("o", "open_browser", "Open", show=False),
         Binding("C", "clear_repo_cache", "Clear cache", show=False),
+        Binding("ctrl+c", "clear_all_caches", "Clear all caches", show=False),
+        Binding("c", "copy_ref", "Copy ref", show=False),
+        Binding("t", "copy_tag", "Copy tag", show=False),
     ]
 
     def __init__(self, config: Config) -> None:
@@ -302,7 +323,7 @@ class GhastlyApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static(
-            " alias                   branch           now          last build   age",
+            " alias                   branch           now          last build   age    commit",
             id="col-header",
         )
         with Horizontal(id="main-area"):
@@ -353,6 +374,7 @@ class GhastlyApp(App[None]):
         visible_rows = list(self._rows.values())
         if visible_rows:
             visible_rows[0].focus()
+            self._set_location("list")
 
         # Adapt alias column width to longest alias
         self._update_alias_column_width()
@@ -363,10 +385,21 @@ class GhastlyApp(App[None]):
         self._start_config_watch()
 
     async def on_unmount(self) -> None:
+        # Cancel all Textual workers (detail-load, clipboard, etc.) before
+        # closing the httpx client, otherwise in-flight requests block exit.
+        self.workers.cancel_all()
+
+        tasks_to_cancel: list[asyncio.Task[object]] = []
         if self._poll_task:
             self._poll_task.cancel()
+            tasks_to_cancel.append(self._poll_task)
         if self._watch_task:
             self._watch_task.cancel()
+            tasks_to_cancel.append(self._watch_task)
+
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
+
         if self._client:
             await self._client.__aexit__(None, None, None)
 
@@ -460,7 +493,8 @@ class GhastlyApp(App[None]):
         if isinstance(focused, GroupHeader):
             if not focused.expanded:
                 focused.toggle()
-        elif isinstance(focused, RepoRow):
+            return
+        if isinstance(focused, RepoRow):
             self.run_worker(self._open_detail_for_row(focused), exclusive=True)
 
     def action_collapse_or_close(self) -> None:
@@ -469,8 +503,21 @@ class GhastlyApp(App[None]):
         if isinstance(focused, GroupHeader):
             if focused.expanded:
                 focused.toggle()
-        elif self._detail_panel is not None:
+            return
+        if self._split_mode and self._detail_panel is not None:
+            # In split mode left/h is a no-op — use Shift+Left/H to focus the list
+            return
+        if self._detail_panel is not None:
             self.run_worker(self._close_detail(), exclusive=True)
+
+    def action_focus_list(self) -> None:
+        """Return keyboard focus to the repo list (Shift+Left / H)."""
+        self._focus_list()
+
+    def action_focus_detail(self) -> None:
+        """Move keyboard focus into the detail panel (Shift+Right / L)."""
+        if self._split_mode and self._detail_panel is not None:
+            self._focus_detail_panel()
 
     def action_rerun_failed(self) -> None:
         """Prompt the user to re-run failed jobs on the focused row."""
@@ -480,8 +527,9 @@ class GhastlyApp(App[None]):
         if focused.run is None:
             self.notify("No run data available", timeout=2)
             return
+        alias = focused.repo.alias or focused.repo.repo
         self._pending_rerun = _PendingRerun(row=focused, full=False)
-        self.notify("Press y to re-run failed jobs, n to cancel", timeout=5)
+        self.notify(f"Re-run failed jobs for {alias}? Press y to confirm, n to cancel", timeout=5)
 
     def action_rerun_all_prompt(self) -> None:
         """Prompt the user to re-run all jobs on the focused row."""
@@ -491,8 +539,12 @@ class GhastlyApp(App[None]):
         if focused.run is None:
             self.notify("No run data available", timeout=2)
             return
+        alias = focused.repo.alias or focused.repo.repo
         self._pending_rerun = _PendingRerun(row=focused, full=True)
-        self.notify("Press y to re-run all jobs, n to cancel", timeout=5)
+        self.notify(
+            f"Re-run entire workflow for {alias}? Press y to confirm, n to cancel",
+            timeout=5,
+        )
 
     def action_open_browser(self) -> None:
         """Open the focused row's run URL in the default browser."""
@@ -527,6 +579,32 @@ class GhastlyApp(App[None]):
                 self._detail_panel.update_for_run(focused.repo, focused.run),
                 exclusive=True,
             )
+
+    def action_close_detail(self) -> None:
+        """Close the detail panel (split mode) or dismiss modal (handled by DetailScreen)."""
+        if self._detail_panel is not None:
+            self.run_worker(self._close_detail(), exclusive=True)
+
+    def action_clear_all_caches(self) -> None:
+        """Clear detail cache, manifest hints, and ETags for all repos."""
+        if self._client is None:
+            return
+        self._client.detail_cache.clear()
+        self._client.manifest_hints.clear()
+        self._client.detail_cache.save()
+        self._client.manifest_hints.save()
+        self._client.clear_etags()
+        self.notify("All caches cleared", timeout=3)
+
+    def action_copy_ref(self) -> None:
+        """Delegate copy-ref to the detail panel when it is open."""
+        if self._detail_panel is not None:
+            self._detail_panel.action_copy_ref()
+
+    def action_copy_tag(self) -> None:
+        """Delegate copy-tag to the detail panel when it is open."""
+        if self._detail_panel is not None:
+            self._detail_panel.action_copy_tag()
 
     # ------------------------------------------------------------------ #
     # Key handler — for rerun confirmation and / shortcut
@@ -577,6 +655,8 @@ class GhastlyApp(App[None]):
         new_idx = (idx + delta) % len(widgets)
         widgets[new_idx].focus()
 
+        self._set_location("list")
+
         # Update detail panel to follow cursor in split mode
         new_widget = widgets[new_idx]
         if (
@@ -589,6 +669,36 @@ class GhastlyApp(App[None]):
                 self._detail_panel.update_for_run(new_widget.repo, new_widget.run),
                 exclusive=True,
             )
+
+    def _focus_detail_panel(self) -> None:
+        """Shift keyboard focus into the detail panel (split mode)."""
+        if self._detail_panel is None:
+            return
+        alias = self._detail_panel._repo.alias or self._detail_panel._repo.repo
+        self._set_location(f"detail: {alias}")
+        # call_after_refresh so the widget tree has settled before the focus
+        # transfer — otherwise the first subsequent keypress gets lost.
+        try:
+            from textual.widgets import DataTable
+            table = self._detail_panel.query_one("#dp-artifact-table", DataTable)
+            self.call_after_refresh(table.focus)
+        except Exception:  # noqa: BLE001
+            self.call_after_refresh(self._detail_panel.focus)
+
+    def _focus_list(self) -> None:
+        """Return keyboard focus to the repo list, preferring the row shown in the detail panel."""
+        widgets = self._focusable_widgets()
+        if not widgets:
+            return
+        if self._split_mode and self._detail_panel is not None:
+            repo_key = self._detail_panel._repo.key
+            for w in widgets:
+                if isinstance(w, RepoRow) and w.repo.key == repo_key:
+                    w.focus()
+                    self._set_location("list")
+                    return
+        widgets[0].focus()
+        self._set_location("list")
 
     # ------------------------------------------------------------------ #
     # Detail panel
@@ -624,6 +734,8 @@ class GhastlyApp(App[None]):
         split = self._should_use_split()
         self._split_mode = split
 
+        alias = repo.alias or repo.repo
+
         if split:
             panel = DetailPanel(
                 client=self._client,
@@ -636,9 +748,20 @@ class GhastlyApp(App[None]):
             repo_list = self.query_one("#repo-list", VerticalScroll)
             repo_list.styles.width = "1fr"
             await main_area.mount(panel)
+            # Focus stays on list in split mode
+            self._set_location("list")
         else:
             # True modal — push onto the screen stack so it captures all input
-            await self.push_screen(DetailScreen(self._client, repo, run))
+            self._set_location(f"detail: {alias}")
+            await self.push_screen(
+                DetailScreen(self._client, repo, run),
+                callback=lambda _: self._set_location("list"),
+            )
+
+    def _set_location(self, location: str) -> None:
+        """Update the status bar location indicator."""
+        if self._status_bar:
+            self._status_bar.location = location
 
     async def _close_detail(self) -> None:
         """Remove the detail panel and restore layout."""
@@ -655,6 +778,7 @@ class GhastlyApp(App[None]):
 
         await self._detail_panel.remove()
         self._detail_panel = None
+        self._set_location("list")
 
     # DetailPanel.Close is no longer used in modal mode (DetailScreen dismisses itself).
     # Kept as a no-op for split mode compatibility if ever needed.
@@ -927,7 +1051,7 @@ class GhastlyApp(App[None]):
         max_len = max(len(repo.alias or repo.repo) for repo in self._config.repos)
         width = min(max(max_len + 2, 12), 40)
         alias_col = "alias".ljust(width)
-        header_text = f" {alias_col}branch           now          last build   age"
+        header_text = f" {alias_col}branch           now          last build   age    commit"
         try:
             self.query_one("#col-header", Static).update(header_text)
         except Exception:  # noqa: BLE001
@@ -1067,13 +1191,16 @@ class GhastlyApp(App[None]):
             logger.warning("watchfiles not available — live config reload disabled")
             return
 
+        watcher = awatch(str(self._config_path), rust_timeout=500)
         try:
-            async for _ in awatch(str(self._config_path)):
+            async for _ in watcher:
                 await self._reload_config()
         except asyncio.CancelledError:
-            pass
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.warning("Config watch error: %s", exc)
+        finally:
+            await watcher.aclose()
 
     async def _reload_config(self) -> None:
         """Reload config and sync repo rows."""

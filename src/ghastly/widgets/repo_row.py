@@ -48,7 +48,7 @@ class RepoRow(Widget):
     }
 
     RepoRow:focus {
-        background: $accent 20%;
+        background: $accent 40%;
     }
 
     RepoRow.highlighted {
@@ -83,11 +83,13 @@ class RepoRow(Widget):
         color: $text-muted;
     }
 
-    RepoRow .col-error {
+    RepoRow .col-commit {
         width: 1fr;
         overflow: hidden hidden;
-        color: $warning;
     }
+
+    RepoRow .commit-normal { color: $text-muted; }
+    RepoRow .commit-error  { color: $warning; }
 
     RepoRow .now-running   { color: $warning; }
     RepoRow .now-queued    { color: $text-muted; }
@@ -131,8 +133,8 @@ class RepoRow(Widget):
         last_text, last_class = self._last_build_text()
         yield Label(last_text, classes=f"col-last-build {last_class}")
         yield Label(self._age_text(), classes="col-age")
-        if self.error:
-            yield Label(f"⚠ {self.error}", classes="col-error")
+        commit_class = "commit-error" if self.error else "commit-normal"
+        yield Label(self._commit_text(), classes=f"col-commit {commit_class}")
 
     # ------------------------------------------------------------------ #
     # Timer tick — update the age column every second
@@ -196,6 +198,10 @@ class RepoRow(Widget):
             last_label.add_class(last_class)
 
             self.query_one(".col-age", Label).update(self._age_text())
+            commit_label = self.query_one(".col-commit", Label)
+            commit_label.update(self._commit_text())
+            commit_label.set_class(bool(self.error), "commit-error")
+            commit_label.set_class(not bool(self.error), "commit-normal")
         except Exception:  # noqa: BLE001
             # Widget may not be mounted yet during init
             pass
@@ -246,6 +252,16 @@ class RepoRow(Widget):
             "cancelled": "build-cancelled",
         }
         return status, class_map.get(status, "build-empty")
+
+    def _commit_text(self) -> str:
+        if self.error:
+            return f"⚠ {self.error}"
+        if self.run and self.run.head_commit_message:
+            msg = self.run.head_commit_message.replace("\n", " ").replace("\r", "").strip()
+            if len(msg) > 90:
+                msg = msg[:87] + "…"
+            return msg
+        return ""
 
     def _age_text(self) -> str:
         """Age of the last completed run."""

@@ -605,3 +605,8 @@ class GitHubClient:
         _save_json(STATE_PATH, self._state)
         self.detail_cache.save()
         self.manifest_hints.save()
+
+    def clear_etags(self) -> None:
+        """Drop all cached ETags, forcing fresh 200 responses on next poll."""
+        self._etags.clear()
+        _save_json(ETAGS_PATH, self._etags)

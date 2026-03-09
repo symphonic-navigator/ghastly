@@ -83,3 +83,7 @@ class DetailCache:
     def clear_all(self) -> None:
         """Remove all cached entries."""
         self._data.clear()
+
+    def clear(self) -> None:
+        """Remove all cached entries (alias for clear_all)."""
+        self._data.clear()

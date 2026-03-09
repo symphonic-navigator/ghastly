@@ -88,17 +88,26 @@ class DetailPanel(Widget):
     }
     """
 
+    can_focus: ClassVar[bool] = True
+
+    BINDINGS: ClassVar[list[Binding]] = [
+        Binding("c", "copy_ref", "Copy ref", show=False),
+        Binding("t", "copy_tag", "Copy tag", show=False),
+    ]
+
     def __init__(
         self,
         client: GitHubClient,
         repo: RepoConfig,
         run: RunData,
+        auto_focus_table: bool = False,
         **kwargs: object,
     ) -> None:
         super().__init__(**kwargs)
         self._client = client
         self._repo = repo
         self._run = run
+        self._auto_focus_table = auto_focus_table
         self._summary_text: str | None = None
         self._manifest: ArtifactManifest | None = None
         self._release_tag: str | None = None
@@ -107,10 +116,8 @@ class DetailPanel(Widget):
         alias = self._repo.alias or self._repo.repo
         branch = self._run.head_branch or self._repo.watch_branch or "—"
         yield Label(f"{alias}  ·  {branch}", id="dp-title")
-        if self._run.head_commit_message:
-            # Show first line of commit message only
-            first_line = self._run.head_commit_message.split("\n", 1)[0]
-            yield Label(first_line, id="dp-commit-msg")
+        commit_msg = self._format_commit_message(self._run.head_commit_message)
+        yield Label(commit_msg, id="dp-commit-msg")
         with Middle(id="dp-loading-container"):
             with Center():
                 yield LoadingIndicator(id="dp-loading")
@@ -220,6 +227,8 @@ class DetailPanel(Widget):
             table.add_columns("name", "type", "version", "ref")
             for item in self._manifest.artifacts:
                 table.add_row(item.name, item.type, item.version, item.ref)
+            if self._auto_focus_table:
+                self.app.call_after_refresh(table.focus)
 
         if self._summary_text:
             await self.mount(Markdown(self._summary_text, id="dp-summary"))
@@ -249,11 +258,9 @@ class DetailPanel(Widget):
         with contextlib.suppress(Exception):
             self.query_one("#dp-title", Label).update(f"{alias}  ·  {branch}")
         with contextlib.suppress(Exception):
-            if run.head_commit_message:
-                first_line = run.head_commit_message.split("\n", 1)[0]
-                self.query_one("#dp-commit-msg", Label).update(first_line)
-            else:
-                self.query_one("#dp-commit-msg", Label).update("")
+            self.query_one("#dp-commit-msg", Label).update(
+                self._format_commit_message(run.head_commit_message)
+            )
 
         # Remove existing content widgets
         content_ids = (
@@ -274,6 +281,91 @@ class DetailPanel(Widget):
         await center2.mount(Label("Fetching build details…", id="dp-loading-label"))
 
         self._load_data()
+
+    @staticmethod
+    def _format_commit_message(message: str | None) -> str:
+        if not message:
+            return ""
+        msg = message.replace("\n", " ").replace("\r", "").strip()
+        return msg[:87] + "…" if len(msg) > 90 else msg
+
+    def action_copy_ref(self) -> None:
+        """Copy the ref of the selected artifact (or run URL) to the clipboard."""
+        ref = self._get_copy_ref()
+        if not ref:
+            self.app.notify("Nothing to copy", timeout=2)
+            return
+        self._do_copy(ref)
+
+    def action_copy_tag(self) -> None:
+        """Copy the tag/version (part after ':' in ref) of the selected artifact."""
+        tag = self._get_copy_tag()
+        if not tag:
+            self.app.notify("Nothing to copy", timeout=2)
+            return
+        self._do_copy(tag)
+
+    @work(exclusive=False, group="clipboard")
+    async def _do_copy(self, ref: str) -> None:
+        """Run clipboard tool in a thread to avoid blocking the event loop."""
+        import asyncio
+        import functools
+        import subprocess
+
+        loop = asyncio.get_event_loop()
+        for cmd in [
+            ["wl-copy"],
+            ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"],
+        ]:
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        subprocess.run, cmd,
+                        input=ref.encode(),
+                        capture_output=True,
+                    ),
+                )
+                if result.returncode == 0:
+                    display = ref if len(ref) <= 60 else ref[:57] + "…"
+                    self.app.notify(f"Ref '{display}' copied", timeout=2)
+                    return
+            except (FileNotFoundError, OSError, subprocess.SubprocessError):
+                continue
+        self.app.notify(
+            "No clipboard tool found (wl-copy/xclip/xsel)", severity="warning", timeout=3,
+        )
+
+    def _get_copy_ref(self) -> str | None:
+        """Return the ref to copy — focused artifact ref, or run URL as fallback."""
+        if self._manifest and self._manifest.artifacts:
+            try:
+                table = self.query_one("#dp-artifact-table", DataTable)
+                idx = table.cursor_row
+                if 0 <= idx < len(self._manifest.artifacts):
+                    return self._manifest.artifacts[idx].ref
+            except Exception:  # noqa: BLE001
+                pass
+        if self._run.html_url:
+            return self._run.html_url
+        return None
+
+    def _get_copy_tag(self) -> str | None:
+        """Return the tag/version to copy — part after ':' in ref, or version field."""
+        if self._manifest and self._manifest.artifacts:
+            try:
+                table = self.query_one("#dp-artifact-table", DataTable)
+                idx = table.cursor_row
+                if 0 <= idx < len(self._manifest.artifacts):
+                    item = self._manifest.artifacts[idx]
+                    if ":" in item.ref:
+                        return item.ref.rsplit(":", 1)[-1]
+                    if item.version:
+                        return item.version
+            except Exception:  # noqa: BLE001
+                pass
+        return None
 
     def open_browser(self) -> None:
         if self._run.html_url:
@@ -305,9 +397,9 @@ class DetailScreen(ModalScreen[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "dismiss", "Close", priority=True),
-        Binding("h", "dismiss", "Close", show=False, priority=True),
-        Binding("left", "dismiss", "Close", show=False, priority=True),
         Binding("o", "open_browser", "Open in browser", show=False),
+        Binding("c", "copy_ref", "Copy ref", show=False),
+        Binding("t", "copy_tag", "Copy tag", show=False),
     ]
 
     def __init__(
@@ -326,6 +418,7 @@ class DetailScreen(ModalScreen[None]):
             client=self._client,
             repo=self._repo,
             run=self._run,
+            auto_focus_table=True,
             id="detail-panel",
         )
 
@@ -334,3 +427,11 @@ class DetailScreen(ModalScreen[None]):
             self.query_one("#detail-panel", DetailPanel).open_browser()
         except Exception:  # noqa: BLE001
             pass
+
+    def action_copy_ref(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#detail-panel", DetailPanel).action_copy_ref()
+
+    def action_copy_tag(self) -> None:
+        with contextlib.suppress(Exception):
+            self.query_one("#detail-panel", DetailPanel).action_copy_tag()

@@ -64,7 +64,7 @@ class DisplayConfig:
     """Display configuration."""
 
     detail_layout: str = "auto"  # "auto" | "modal" | "split"
-    poll_interval: int = 60
+    poll_interval: int = 30
     theme: str = "textual-dark"
 
 
@@ -111,7 +111,7 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     display_raw = raw.get("display", {})
     display = DisplayConfig(
         detail_layout=display_raw.get("detail_layout", "auto"),
-        poll_interval=int(display_raw.get("poll_interval", 60)),
+        poll_interval=int(display_raw.get("poll_interval", 30)),
         theme=display_raw.get("theme", "textual-dark"),
     )
 
@@ -170,7 +170,7 @@ def write_config(config_data: dict[str, object], path: Path = CONFIG_PATH) -> No
     if isinstance(display, dict):
         lines.append("[display]")
         lines.append(f'detail_layout = "{display.get("detail_layout", "auto")}"')
-        lines.append(f'poll_interval = {display.get("poll_interval", 60)}')
+        lines.append(f'poll_interval = {display.get("poll_interval", 30)}')
         lines.append(f'theme = "{display.get("theme", "textual-dark")}"')
         lines.append("")
 

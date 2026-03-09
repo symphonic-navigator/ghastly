@@ -58,3 +58,7 @@ class ManifestHints:
     def clear_all(self) -> None:
         """Remove all hints."""
         self._data.clear()
+
+    def clear(self) -> None:
+        """Remove all hints (alias for clear_all)."""
+        self._data.clear()
