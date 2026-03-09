@@ -217,7 +217,8 @@ class DetailPanel(Widget):
     async def _render_content(self) -> None:
         """Remove the loading indicator and mount the actual content widgets."""
         # Remove any existing content (guards against race conditions on fast switching)
-        for widget_id in ("#dp-loading-container", "#dp-artifact-table", "#dp-summary", "#dp-release"):
+        for widget_id in ("#dp-loading-container", "#dp-artifact-table", "#dp-summary",
+                          "#dp-release"):
             with contextlib.suppress(Exception):
                 await self.query_one(widget_id).remove()
 
@@ -307,32 +308,48 @@ class DetailPanel(Widget):
 
     @work(exclusive=False, group="clipboard")
     async def _do_copy(self, ref: str) -> None:
-        """Run clipboard tool in a thread to avoid blocking the event loop."""
+        """Write ref to the system clipboard using the first available tool."""
         import asyncio
-        import functools
-        import subprocess
 
-        loop = asyncio.get_event_loop()
+        data = ref.encode()
+        display = ref if len(ref) <= 60 else ref[:57] + "…"
+
         for cmd in [
             ["wl-copy"],
             ["xclip", "-selection", "clipboard"],
             ["xsel", "--clipboard", "--input"],
         ]:
             try:
-                result = await loop.run_in_executor(
-                    None,
-                    functools.partial(
-                        subprocess.run, cmd,
-                        input=ref.encode(),
-                        capture_output=True,
-                    ),
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
                 )
-                if result.returncode == 0:
-                    display = ref if len(ref) <= 60 else ref[:57] + "…"
-                    self.app.notify(f"Ref '{display}' copied", timeout=2)
-                    return
-            except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            except (FileNotFoundError, OSError):
                 continue
+
+            try:
+                proc.stdin.write(data)
+                await proc.stdin.drain()
+                proc.stdin.close()
+            except OSError:
+                proc.kill()
+                continue
+
+            try:
+                # wl-copy/xclip stay resident to serve paste requests — a
+                # timeout here means the data was delivered successfully.
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                if proc.returncode != 0:
+                    continue
+            except TimeoutError:
+                # Process is running in the background serving the clipboard.
+                pass
+
+            self.app.notify(f"Ref '{display}' copied", timeout=2)
+            return
+
         self.app.notify(
             "No clipboard tool found (wl-copy/xclip/xsel)", severity="warning", timeout=3,
         )
@@ -423,10 +440,8 @@ class DetailScreen(ModalScreen[None]):
         )
 
     def action_open_browser(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#detail-panel", DetailPanel).open_browser()
-        except Exception:  # noqa: BLE001
-            pass
 
     def action_copy_ref(self) -> None:
         with contextlib.suppress(Exception):
