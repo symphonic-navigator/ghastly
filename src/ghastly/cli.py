@@ -315,6 +315,32 @@ def unset_group(
     typer.echo(f"Removed {key} from its group (now in 'default').")
 
 
+@app.command(name="clear-cache")
+def clear_cache(
+    repo: str = typer.Argument("", help="Repo key (owner/repo) to clear, or empty for all"),
+) -> None:
+    """Clear the build detail cache and manifest hints."""
+    from .config import DETAIL_CACHE_PATH, MANIFEST_HINTS_PATH
+    from .detail_cache import DetailCache
+    from .manifest_hints import ManifestHints
+
+    dc = DetailCache(DETAIL_CACHE_PATH)
+    mh = ManifestHints(MANIFEST_HINTS_PATH)
+
+    if repo:
+        dc.clear_repo(repo)
+        mh.clear_repo(repo)
+        dc.save()
+        mh.save()
+        typer.echo(f"Cache cleared for {repo}")
+    else:
+        dc.clear_all()
+        mh.clear_all()
+        dc.save()
+        mh.save()
+        typer.echo("All caches cleared")
+
+
 @app.command(name="alias")
 def set_alias(
     identifier: Annotated[str, typer.Argument(help="Index, URL, or owner/repo")],

@@ -162,6 +162,7 @@ _HELP_TEXT = """\
 │   o            Open run in browser          │
 │   R            Re-run failed jobs           │
 │   Ctrl+R       Re-run entire workflow       │
+│   C            Clear cache for repo         │
 │                                             │
 │   Press Esc or ? to close                  │
 └─────────────────────────────────────────────┘\
@@ -261,6 +262,7 @@ class GhastlyApp(App[None]):
         Binding("R", "rerun_failed", "Rerun failed", show=False),
         Binding("ctrl+r", "rerun_all_prompt", "Rerun all", show=False),
         Binding("o", "open_browser", "Open", show=False),
+        Binding("C", "clear_repo_cache", "Clear cache", show=False),
     ]
 
     def __init__(self, config: Config) -> None:
@@ -500,6 +502,20 @@ class GhastlyApp(App[None]):
             url = focused.run.html_url
             if url:
                 webbrowser.open(url)
+
+    def action_clear_repo_cache(self) -> None:
+        """Clear detail cache and manifest hints for the focused repo."""
+        focused = self.focused
+        if not isinstance(focused, RepoRow):
+            return
+        if self._client is None:
+            return
+        repo_key = focused.repo.key
+        self._client.detail_cache.clear_repo(repo_key)
+        self._client.manifest_hints.clear_repo(repo_key)
+        self._client.detail_cache.save()
+        self._client.manifest_hints.save()
+        self.notify(f"Cache cleared for {repo_key}", timeout=3)
 
     # ------------------------------------------------------------------ #
     # Key handler — for rerun confirmation and / shortcut
