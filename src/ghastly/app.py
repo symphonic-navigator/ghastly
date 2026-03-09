@@ -352,6 +352,10 @@ class GhastlyApp(App[None]):
         if visible_rows:
             visible_rows[0].focus()
 
+        # Adapt alias column width to longest alias
+        self._update_alias_column_width()
+        self._update_column_header()
+
         # Start polling and config watch
         self._start_polling()
         self._start_config_watch()
@@ -856,6 +860,40 @@ class GhastlyApp(App[None]):
             )
 
     # ------------------------------------------------------------------ #
+    # Adaptive alias column
+    # ------------------------------------------------------------------ #
+
+    def _update_alias_column_width(self) -> None:
+        """Set alias column width based on the longest alias across all repos."""
+        if not self._config.repos:
+            return
+        max_len = max(
+            len(repo.alias or repo.repo) for repo in self._config.repos
+        )
+        # Add 2 chars padding, minimum 12, maximum 40
+        width = min(max(max_len + 2, 12), 40)
+
+        for row in self._rows.values():
+            try:
+                alias_label = row.query_one(".col-alias", Label)
+                alias_label.styles.width = width
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _update_column_header(self) -> None:
+        """Update the column header to match current alias width."""
+        if not self._config.repos:
+            return
+        max_len = max(len(repo.alias or repo.repo) for repo in self._config.repos)
+        width = min(max(max_len + 2, 12), 40)
+        alias_col = "alias".ljust(width)
+        header_text = f" {alias_col}branch           now          last build   age"
+        try:
+            self.query_one("#col-header", Static).update(header_text)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ------------------------------------------------------------------ #
     # Polling
     # ------------------------------------------------------------------ #
 
@@ -1028,6 +1066,9 @@ class GhastlyApp(App[None]):
         self._config = new_config
         if self._status_bar:
             self._status_bar.repo_count = len(new_config.repos)
+
+        self._update_alias_column_width()
+        self._update_column_header()
 
         self.notify("Config reloaded", timeout=3)
 

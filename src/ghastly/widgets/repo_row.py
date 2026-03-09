@@ -56,7 +56,7 @@ class RepoRow(Widget):
     }
 
     RepoRow .col-alias {
-        width: 24;
+        min-width: 8;
         overflow: hidden hidden;
         color: $text;
     }
