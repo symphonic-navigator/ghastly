@@ -323,7 +323,7 @@ class GhastlyApp(App[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static(
-            " alias                   branch           now          last build   age    commit",
+            "alias       branch          now         last build  dur     age                 commit",
             id="col-header",
         )
         with Horizontal(id="main-area"):
@@ -1050,8 +1050,15 @@ class GhastlyApp(App[None]):
             return
         max_len = max(len(repo.alias or repo.repo) for repo in self._config.repos)
         width = min(max(max_len + 2, 12), 40)
-        alias_col = "alias".ljust(width)
-        header_text = f" {alias_col}branch           now          last build   age    commit"
+        header_text = (
+            "alias".ljust(width)
+            + "branch".ljust(16)
+            + "now".ljust(12)
+            + "last build".ljust(12)
+            + "dur".ljust(8)
+            + "age".ljust(20)
+            + "commit"
+        )
         try:
             self.query_one("#col-header", Static).update(header_text)
         except Exception:  # noqa: BLE001
