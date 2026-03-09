@@ -111,19 +111,27 @@ class DetailPanel(Widget):
 
     @work
     async def _load_data(self) -> None:
-        """Fetch summary and/or release data, then render the panel contents."""
+        """Fetch manifest and/or summary data, then render the panel contents."""
         run_id = self._run.run_id
         owner = self._repo.owner
         repo = self._repo.repo
 
+        # 1. Artifact-based manifest (reliable — GitHub exposes artifacts via API)
+        try:
+            self._manifest = await self._client.get_manifest_from_artifact(owner, repo, run_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Error fetching manifest artifact for %s/%s run %s: %s", owner, repo, run_id, exc)
+
+        # 2. Step summary — for Markdown display and legacy manifest extraction
         try:
             self._summary_text = await self._client.get_step_summary(owner, repo, run_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Error fetching step summary for %s/%s run %s: %s", owner, repo, run_id, exc)
 
-        if self._summary_text:
+        if not self._manifest and self._summary_text:
             self._manifest = extract_manifest(self._summary_text)
 
+        # 3. Fall back to latest release tag
         if not self._manifest:
             try:
                 self._release_tag = await self._client.get_latest_release(owner, repo)
@@ -150,7 +158,7 @@ class DetailPanel(Widget):
             await self.mount(Markdown(self._summary_text, id="dp-summary"))
         elif self._release_tag:
             await self.mount(Label(f"Latest release: {self._release_tag}", id="dp-release"))
-        else:
+        elif not self._manifest:
             await self.mount(Label(
                 f"No summary available — run status: {self._run.display_status}",
                 id="dp-release",

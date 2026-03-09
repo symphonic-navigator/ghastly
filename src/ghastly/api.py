@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +14,7 @@ from typing import Any
 import httpx
 
 from .config import ETAGS_PATH, STATE_PATH
+from .schema import ArtifactManifest, parse_manifest_json
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +350,65 @@ class GitHubClient:
                 state.get("last_completed_updated_at")
             ),
         )
+
+    async def get_manifest_from_artifact(
+        self, owner: str, repo: str, run_id: int
+    ) -> ArtifactManifest | None:
+        """Download the 'ghastly-manifest' Actions artifact and parse its JSON content.
+
+        Returns an ArtifactManifest on success, or None if the artifact is absent,
+        the download fails, or the JSON is invalid. Never raises.
+        """
+        if not self._client:
+            raise RuntimeError("Client not initialised — use async context manager")
+
+        url = f"/repos/{owner}/{repo}/actions/runs/{run_id}/artifacts"
+        logger.debug("GET %s", url)
+        try:
+            resp = await self._client.get(url, params={"per_page": 100})
+        except httpx.RequestError as exc:
+            logger.warning("Network error listing artifacts for run %s: %s", run_id, exc)
+            return None
+
+        if resp.status_code != 200:
+            logger.warning("Unexpected status %s listing artifacts for run %s", resp.status_code, run_id)
+            return None
+
+        for artifact in resp.json().get("artifacts", []):
+            if artifact.get("name") != "ghastly-manifest":
+                continue
+
+            download_url = str(artifact.get("archive_download_url", ""))
+            if not download_url:
+                continue
+
+            logger.debug("Downloading ghastly-manifest artifact: %s", download_url)
+            try:
+                zip_resp = await self._client.get(download_url, follow_redirects=True)
+            except httpx.RequestError as exc:
+                logger.warning("Network error downloading ghastly-manifest: %s", exc)
+                return None
+
+            if zip_resp.status_code != 200:
+                logger.warning(
+                    "Unexpected status %s downloading ghastly-manifest", zip_resp.status_code
+                )
+                return None
+
+            try:
+                with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+                    for name in zf.namelist():
+                        raw = zf.read(name).decode("utf-8").strip()
+                        if raw:
+                            manifest = parse_manifest_json(raw)
+                            if manifest:
+                                return manifest
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to unzip ghastly-manifest artifact: %s", exc)
+
+            return None  # artifact found but unreadable
+
+        return None  # artifact not present for this run
 
     async def get_step_summary(self, owner: str, repo: str, run_id: int) -> str | None:
         """Fetch the step summary markdown for a run, if available.

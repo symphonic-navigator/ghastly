@@ -27,7 +27,7 @@ class ArtifactItem:
 
 @dataclass
 class ArtifactManifest:
-    """Parsed ghastly/v1 artifact manifest embedded in a step summary."""
+    """Parsed ghastly/v1 artifact manifest."""
 
     schema: str
     built_at: datetime | None
@@ -35,18 +35,13 @@ class ArtifactManifest:
     artifacts: list[ArtifactItem]
 
 
-def extract_manifest(summary_text: str) -> ArtifactManifest | None:
-    """Extract and parse an artifact manifest from a step summary string.
+def parse_manifest_json(raw_json: str) -> ArtifactManifest | None:
+    """Parse a raw JSON string into an ArtifactManifest.
 
-    Returns an ArtifactManifest if a valid ghastly/v1 block is found,
-    or None on any failure (missing block, wrong schema, parse error, etc.).
-    Never raises.
+    Used when the manifest is available as a standalone JSON file
+    (e.g. a GitHub Actions artifact) rather than embedded in a step summary.
+    Returns None on any failure. Never raises.
     """
-    match = _BLOCK_RE.search(summary_text)
-    if not match:
-        return None
-
-    raw_json = match.group(1).strip()
     try:
         data: object = json.loads(raw_json)
     except json.JSONDecodeError as exc:
@@ -101,3 +96,17 @@ def extract_manifest(summary_text: str) -> ArtifactManifest | None:
         trigger=trigger,
         artifacts=artifacts,
     )
+
+
+def extract_manifest(summary_text: str) -> ArtifactManifest | None:
+    """Extract and parse an artifact manifest from a step summary string.
+
+    Returns an ArtifactManifest if a valid ghastly/v1 block is found,
+    or None on any failure (missing block, wrong schema, parse error, etc.).
+    Never raises.
+    """
+    match = _BLOCK_RE.search(summary_text)
+    if not match:
+        return None
+
+    return parse_manifest_json(match.group(1).strip())
