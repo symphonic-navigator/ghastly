@@ -16,7 +16,7 @@ from textual.widgets import DataTable, Label, LoadingIndicator, Markdown
 
 from ..api import GitHubClient, RunData
 from ..config import RepoConfig
-from ..schema import ArtifactManifest, extract_manifest
+from ..schema import ArtifactManifest, extract_manifest, parse_manifest_json
 
 logger = logging.getLogger(__name__)
 
@@ -111,32 +111,80 @@ class DetailPanel(Widget):
 
     @work
     async def _load_data(self) -> None:
-        """Fetch manifest and/or summary data, then render the panel contents."""
+        """Fetch manifest and/or summary data, then render the panel contents.
+
+        Uses the persistent detail cache to avoid redundant API calls.  On a
+        cache miss the result is stored for future lookups.
+        """
         run_id = self._run.run_id
         owner = self._repo.owner
         repo = self._repo.repo
+        repo_key = self._repo.key
+        updated_at = self._run.updated_at.isoformat() if self._run.updated_at else ""
 
-        # 1. Artifact-based manifest (reliable — GitHub exposes artifacts via API)
+        # 1. Check detail cache
+        cached = self._client.detail_cache.get(repo_key, run_id, updated_at)
+        if cached is not None:
+            logger.debug("Detail cache hit for %s run %s", repo_key, run_id)
+            if cached.manifest_json:
+                self._manifest = parse_manifest_json(cached.manifest_json)
+            self._summary_text = cached.summary_text
+            self._release_tag = cached.release_tag
+            await self._render_content()
+            return
+
+        logger.debug("Detail cache miss for %s run %s — fetching from API", repo_key, run_id)
+
+        # 2. Artifact-based manifest
         try:
             self._manifest = await self._client.get_manifest_from_artifact(owner, repo, run_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Error fetching manifest artifact for %s/%s run %s: %s", owner, repo, run_id, exc)
 
-        # 2. Step summary — for Markdown display and legacy manifest extraction
+        # 3. Step summary with hint
+        hint = self._client.manifest_hints.get_summary_job(repo_key)
         try:
-            self._summary_text = await self._client.get_step_summary(owner, repo, run_id)
+            self._summary_text, job_name = await self._client.get_step_summary(
+                owner, repo, run_id, hint_job_name=hint,
+            )
+            if job_name:
+                self._client.manifest_hints.set_summary_job(repo_key, job_name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Error fetching step summary for %s/%s run %s: %s", owner, repo, run_id, exc)
 
         if not self._manifest and self._summary_text:
             self._manifest = extract_manifest(self._summary_text)
 
-        # 3. Fall back to latest release tag
+        # 4. Fall back to latest release tag
         if not self._manifest:
             try:
                 self._release_tag = await self._client.get_latest_release(owner, repo)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Error fetching latest release for %s/%s: %s", owner, repo, exc)
+
+        # 5. Store in detail cache
+        manifest_json: str | None = None
+        if self._manifest:
+            import json as _json
+            manifest_json = _json.dumps({
+                "schema": self._manifest.schema,
+                "built_at": self._manifest.built_at.isoformat() if self._manifest.built_at else None,
+                "trigger": self._manifest.trigger,
+                "artifacts": [
+                    {"name": a.name, "type": a.type, "version": a.version, "ref": a.ref}
+                    for a in self._manifest.artifacts
+                ],
+            })
+
+        from ..detail_cache import DetailEntry
+        self._client.detail_cache.put(
+            repo_key, run_id, updated_at,
+            DetailEntry(
+                manifest_json=manifest_json,
+                summary_text=self._summary_text,
+                release_tag=self._release_tag,
+            ),
+        )
 
         await self._render_content()
 
