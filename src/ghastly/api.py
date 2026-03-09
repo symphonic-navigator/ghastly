@@ -116,6 +116,8 @@ class GitHubClient:
         self._etags: dict[str, str] = {}
         self._cached_runs: dict[str, dict[str, Any]] = {}
         self._state: dict[str, dict[str, Any]] = {}
+        self.detail_cache = DetailCache(DETAIL_CACHE_PATH)
+        self.manifest_hints = ManifestHints(MANIFEST_HINTS_PATH)
 
     async def __aenter__(self) -> "GitHubClient":
         self._client = httpx.AsyncClient(
@@ -136,6 +138,8 @@ class GitHubClient:
             await self._client.aclose()
         _save_json(ETAGS_PATH, self._etags)
         _save_json(STATE_PATH, self._state)
+        self.detail_cache.save()
+        self.manifest_hints.save()
 
     async def validate_pat(self) -> str | None:
         """Validate PAT by calling GET /user. Returns GitHub login or None on failure."""
@@ -589,6 +593,8 @@ class GitHubClient:
         return True
 
     def flush(self) -> None:
-        """Persist ETags and state to disk immediately."""
+        """Persist ETags, state, detail cache, and manifest hints to disk immediately."""
         _save_json(ETAGS_PATH, self._etags)
         _save_json(STATE_PATH, self._state)
+        self.detail_cache.save()
+        self.manifest_hints.save()
