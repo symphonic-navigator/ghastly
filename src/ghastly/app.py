@@ -517,6 +517,17 @@ class GhastlyApp(App[None]):
         self._client.manifest_hints.save()
         self.notify(f"Cache cleared for {repo_key}", timeout=3)
 
+        # Refresh the detail panel if it's showing this repo
+        if (
+            self._detail_panel is not None
+            and self._detail_panel._repo.key == repo_key
+            and focused.run is not None
+        ):
+            self.run_worker(
+                self._detail_panel.update_for_run(focused.repo, focused.run),
+                exclusive=True,
+            )
+
     # ------------------------------------------------------------------ #
     # Key handler — for rerun confirmation and / shortcut
     # ------------------------------------------------------------------ #

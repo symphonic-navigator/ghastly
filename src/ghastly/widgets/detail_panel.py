@@ -38,6 +38,12 @@ class DetailPanel(Widget):
     DetailPanel #dp-title {
         text-style: bold;
         color: $text;
+        margin-bottom: 0;
+    }
+
+    DetailPanel #dp-commit-msg {
+        color: $text-muted;
+        text-style: italic;
         margin-bottom: 1;
     }
 
@@ -101,6 +107,10 @@ class DetailPanel(Widget):
         alias = self._repo.alias or self._repo.repo
         branch = self._run.head_branch or self._repo.watch_branch or "—"
         yield Label(f"{alias}  ·  {branch}", id="dp-title")
+        if self._run.head_commit_message:
+            # Show first line of commit message only
+            first_line = self._run.head_commit_message.split("\n", 1)[0]
+            yield Label(first_line, id="dp-commit-msg")
         with Middle(id="dp-loading-container"):
             with Center():
                 yield LoadingIndicator(id="dp-loading")
@@ -233,11 +243,17 @@ class DetailPanel(Widget):
         self._summary_text = None
         self._release_tag = None
 
-        # Update title
+        # Update title and commit message
         alias = repo.alias or repo.repo
         branch = run.head_branch or repo.watch_branch or "—"
         with contextlib.suppress(Exception):
             self.query_one("#dp-title", Label).update(f"{alias}  ·  {branch}")
+        with contextlib.suppress(Exception):
+            if run.head_commit_message:
+                first_line = run.head_commit_message.split("\n", 1)[0]
+                self.query_one("#dp-commit-msg", Label).update(first_line)
+            else:
+                self.query_one("#dp-commit-msg", Label).update("")
 
         # Remove existing content widgets
         content_ids = (

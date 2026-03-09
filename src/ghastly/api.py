@@ -34,6 +34,7 @@ class RunData:
     run_started_at: datetime | None
     updated_at: datetime | None
     head_branch: str | None
+    head_commit_message: str | None         # commit message that triggered the run
     last_completed_status: str | None       # conclusion of the last completed run
     last_completed_updated_at: datetime | None  # updated_at of the last completed run
 
@@ -287,6 +288,7 @@ class GitHubClient:
             "run_started_at": run.run_started_at.isoformat() if run.run_started_at else None,
             "updated_at": run.updated_at.isoformat() if run.updated_at else None,
             "head_branch": run.head_branch,
+            "head_commit_message": run.head_commit_message,
             "last_completed_status": run.last_completed_status,
             "last_completed_updated_at": (
                 run.last_completed_updated_at.isoformat()
@@ -326,6 +328,9 @@ class GitHubClient:
                 prev_state.get("last_completed_updated_at")
             )
 
+        head_commit = raw.get("head_commit") or {}
+        head_commit_message: str | None = head_commit.get("message") if head_commit else None
+
         return RunData(
             run_id=int(raw.get("id", 0)),
             status=status,
@@ -334,6 +339,7 @@ class GitHubClient:
             run_started_at=_parse_datetime(raw.get("run_started_at")),
             updated_at=updated_at,
             head_branch=raw.get("head_branch"),
+            head_commit_message=head_commit_message,
             last_completed_status=last_completed_status,
             last_completed_updated_at=last_completed_updated_at,
         )
@@ -351,6 +357,7 @@ class GitHubClient:
             run_started_at=_parse_datetime(state.get("run_started_at")),
             updated_at=_parse_datetime(state.get("updated_at")),
             head_branch=state.get("head_branch"),
+            head_commit_message=state.get("head_commit_message"),
             last_completed_status=state.get("last_completed_status"),
             last_completed_updated_at=_parse_datetime(
                 state.get("last_completed_updated_at")
