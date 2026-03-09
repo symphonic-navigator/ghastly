@@ -14,6 +14,8 @@ DATA_DIR = Path.home() / ".local" / "share" / "ghastly"
 STATE_PATH = DATA_DIR / "state.json"
 ETAGS_PATH = DATA_DIR / "etags.json"
 LOG_PATH = DATA_DIR / "ghastly.log"
+DETAIL_CACHE_PATH = DATA_DIR / "detail_cache.json"
+MANIFEST_HINTS_PATH = DATA_DIR / "manifest_hints.json"
 
 
 @dataclass
