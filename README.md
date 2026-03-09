@@ -86,40 +86,58 @@ yay -S ghastly
 
 ## Keyboard Shortcuts
 
+Press `?` inside the TUI at any time to show the built-in help overlay.
+
 ### Navigation
 
 Dual-mode navigation — cursor keys and hjkl both work everywhere.
 
-| Keys         | Action                                 |
-|--------------|----------------------------------------|
-| `Up` / `k`   | Move up                                |
-| `Down` / `j` | Move down                              |
-| `Left` / `h` | Collapse group / close detail panel    |
-| `Right` / `l`| Expand group / open detail panel       |
+| Keys                    | Action                              |
+|-------------------------|-------------------------------------|
+| `Up` / `k`              | Move up                             |
+| `Down` / `j`            | Move down                           |
+| `Right` / `l`           | Expand group / open detail panel    |
+| `Left` / `h`            | Collapse group                      |
+| `Shift+Right` / `L`     | Focus detail panel                  |
+| `Shift+Left` / `H`      | Focus back to list                  |
 
 ### Global
 
-| Key       | Action                          |
-|-----------|---------------------------------|
-| `?`       | Show help overlay               |
-| `q`       | Quit                            |
-| `Shift+R` | Force refresh all repos now     |
-| `g`       | Toggle group view               |
-| `/`       | Open fuzzy filter bar           |
-| `Esc`     | Close filter / detail / modal   |
+| Key       | Action                        |
+|-----------|-------------------------------|
+| `?`       | Show help overlay             |
+| `q`       | Quit                          |
+| `r`       | Force refresh all repos now   |
+| `g`       | Toggle group view             |
+| `s`       | Cycle sort order              |
+| `/`       | Open fuzzy filter bar         |
+| `Esc`     | Close detail / filter / modal |
+
+Sort cycles through: **last run** → **status** → **alias**.
 
 ### On Selected Repo Row
 
-| Key       | Action                                              |
-|-----------|-----------------------------------------------------|
-| `Enter`   | Open build detail panel                             |
-| `o`       | Open run in browser                                 |
-| `r`       | Re-trigger failed steps only (`rerun-failed-jobs`)  |
-| `Shift+R` | Re-trigger entire run (`rerun`)                     |
-| `a`       | Add new repo (opens input prompt)                   |
+| Key        | Action                                      |
+|------------|---------------------------------------------|
+| `Enter`    | Open build detail panel                     |
+| `o`        | Open run in browser                         |
+| `R`        | Re-run failed jobs for this build           |
+| `Ctrl+R`   | Re-run entire workflow                      |
+| `C`        | Clear cached detail for this repo           |
+| `Ctrl+C`   | Clear all caches                            |
 
-> `r` and `Shift+R` require `actions:write` PAT scope. ghastly warns gracefully
+> `R` and `Ctrl+R` require `actions:write` PAT scope. ghastly warns gracefully
 > if the scope is missing rather than showing a cryptic API error.
+
+### In Detail Panel
+
+| Key                 | Action                              |
+|---------------------|-------------------------------------|
+| `c`                 | Copy ref to clipboard               |
+| `t`                 | Copy tag / version to clipboard     |
+| `o`                 | Open run in browser                 |
+| `Shift+Left` / `H`  | Focus back to list                  |
+| `Esc`               | Close detail panel                  |
 
 ---
 
@@ -140,7 +158,8 @@ pat = "ghp_xxxxxxxxxxxx"          # GitHub PAT — required
 
 [display]
 detail_layout = "auto"            # "auto" | "modal" | "split"
-poll_interval = 60                # seconds between polls
+poll_interval = 30                # seconds between polls (default: 30)
+theme = "textual-dark"            # Textual theme name
 
 [notifications]
 on_success = true
@@ -148,13 +167,56 @@ on_failure = true
 on_cancelled = false
 system_notify = true              # use notify-send for desktop notifications
 
+log_level = "WARNING"             # Python log level: DEBUG | INFO | WARNING | ERROR
+
 [[repos]]
 url = "https://github.com/owner/repo"
 alias = "my-service"              # display name (defaults to repo name)
 group = "work"                    # used for group view (g key)
-watch_branch = "main"             # only track runs on this branch
+watch_branch = "main"             # only track runs on this branch; empty = default branch
 artifact_hint = "auto"            # "auto" | "latest" | "releases"
 ```
+
+### Configuration reference
+
+#### `[auth]`
+
+| Key   | Required | Description                  |
+|-------|----------|------------------------------|
+| `pat` | yes      | GitHub Personal Access Token |
+
+#### `[display]`
+
+| Key             | Default        | Description                                                             |
+|-----------------|----------------|-------------------------------------------------------------------------|
+| `detail_layout` | `"auto"`       | `"auto"` — split at ≥120 cols, otherwise modal; `"modal"`; `"split"`   |
+| `poll_interval` | `30`           | Seconds between polling cycles                                          |
+| `theme`         | `"textual-dark"` | Textual built-in theme name                                           |
+
+#### `[notifications]`
+
+| Key             | Default | Description                                       |
+|-----------------|---------|---------------------------------------------------|
+| `on_success`    | `true`  | Notify when a build transitions to success        |
+| `on_failure`    | `true`  | Notify when a build transitions to failure        |
+| `on_cancelled`  | `false` | Notify when a build is cancelled                  |
+| `system_notify` | `true`  | Fire `notify-send` for desktop notifications      |
+
+#### Top-level
+
+| Key         | Default     | Description                                          |
+|-------------|-------------|------------------------------------------------------|
+| `log_level` | `"WARNING"` | File log verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+
+#### `[[repos]]`
+
+| Key             | Default    | Description                                                |
+|-----------------|------------|------------------------------------------------------------|
+| `url`           | required   | Full GitHub repository URL                                 |
+| `alias`         | repo name  | Display name shown in the TUI                              |
+| `group`         | `"default"`| Group label for the group view (`g` key)                   |
+| `watch_branch`  | `""`       | Only show runs on this branch; empty = default branch      |
+| `artifact_hint` | `"auto"`   | Controls how ghastly fetches artifact / version data       |
 
 The `artifact_hint` option controls how ghastly fetches artifact data:
 
@@ -185,12 +247,14 @@ full `ghastly/v1` schema reference.
 
 ## XDG Paths
 
-| Path                                     | Purpose                            |
-|------------------------------------------|------------------------------------|
-| `~/.config/ghastly/config.toml`          | Repos, PAT, preferences            |
-| `~/.local/share/ghastly/state.json`      | Last known run IDs for diffing     |
-| `~/.local/share/ghastly/etags.json`      | ETag cache for conditional requests|
-| `~/.local/share/ghastly/ghastly.log`     | Application log                    |
+| Path                                          | Purpose                                 |
+|-----------------------------------------------|-----------------------------------------|
+| `~/.config/ghastly/config.toml`               | Repos, PAT, preferences                 |
+| `~/.local/share/ghastly/state.json`           | Last known run IDs for state diffing    |
+| `~/.local/share/ghastly/etags.json`           | ETag cache for conditional HTTP requests|
+| `~/.local/share/ghastly/detail_cache.json`    | Cached detail panel content per repo    |
+| `~/.local/share/ghastly/manifest_hints.json`  | Cached `ghastly/v1` manifest hints      |
+| `~/.local/share/ghastly/ghastly.log`          | Application log (level from config)     |
 
 ---
 
