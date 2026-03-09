@@ -110,7 +110,7 @@ class DetailPanel(Widget):
     def on_mount(self) -> None:
         self._load_data()
 
-    @work
+    @work(exclusive=True, group="detail-load")
     async def _load_data(self) -> None:
         """Fetch manifest and/or summary data, then render the panel contents.
 
@@ -199,10 +199,10 @@ class DetailPanel(Widget):
 
     async def _render_content(self) -> None:
         """Remove the loading indicator and mount the actual content widgets."""
-        try:
-            await self.query_one("#dp-loading-container").remove()
-        except Exception:  # noqa: BLE001
-            pass
+        # Remove any existing content (guards against race conditions on fast switching)
+        for widget_id in ("#dp-loading-container", "#dp-artifact-table", "#dp-summary", "#dp-release"):
+            with contextlib.suppress(Exception):
+                await self.query_one(widget_id).remove()
 
         if self._manifest and self._manifest.artifacts:
             table: DataTable[str] = DataTable(id="dp-artifact-table")
