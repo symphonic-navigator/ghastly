@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Annotated, Optional
+import json as _json
+from datetime import UTC, datetime
+from typing import Annotated
 
 import typer
 
@@ -153,10 +155,10 @@ def init() -> None:
 @app.command()
 def add(
     url: str = typer.Argument(..., help="GitHub repository URL"),
-    alias: Annotated[Optional[str], typer.Option("--alias", "-a", help="Display alias")] = None,
-    group: Annotated[Optional[str], typer.Option("--group", "-g", help="Group name")] = None,
+    alias: Annotated[str | None, typer.Option("--alias", "-a", help="Display alias")] = None,
+    group: Annotated[str | None, typer.Option("--group", "-g", help="Group name")] = None,
     branch: Annotated[
-        Optional[str], typer.Option("--branch", "-b", help="Branch to watch")
+        str | None, typer.Option("--branch", "-b", help="Branch to watch")
     ] = None,
 ) -> None:
     """Add a repository to the watch list."""
@@ -222,6 +224,144 @@ def list_repos() -> None:
         group = repo.group or "default"
         branch = repo.watch_branch or "(default)"
         typer.echo(f"  {idx:>3}  {alias:<{w_alias}}  {repo.key:<{w_key}}  {group:<{w_group}}  {branch}")
+
+
+def _age_short(iso: str) -> str:
+    """Return a compact age string like '2h 15m' or '45m' from an ISO timestamp."""
+    if not iso:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return "—"
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    delta = datetime.now(tz=UTC) - dt
+    total = max(0, int(delta.total_seconds()))
+    mins = total // 60
+    hours = mins // 60
+    days = hours // 24
+    if days >= 1:
+        return f"{days}d {hours % 24}h"
+    if hours >= 1:
+        return f"{hours}h {mins % 60}m"
+    return f"{mins}m"
+
+
+@app.command()
+def status(
+    json_output: Annotated[bool, typer.Option("--json", help="Output as JSON")] = False,
+) -> None:
+    """Show current build status of all watched repositories."""
+    from .config import CONFIG_PATH, STATE_PATH, load_config
+
+    if not CONFIG_PATH.exists():
+        typer.echo(
+            f"Config file not found at {CONFIG_PATH}. Run `ghastly init` first.", err=True
+        )
+        raise typer.Exit(1)
+
+    config = load_config(CONFIG_PATH)
+
+    state: dict[str, object] = {}
+    import contextlib
+    if STATE_PATH.exists():
+        with contextlib.suppress(Exception):
+            state = _json.loads(STATE_PATH.read_text(encoding="utf-8"))
+
+    repos_out = []
+    counts: dict[str, int] = {"success": 0, "failure": 0, "running": 0, "other": 0}
+
+    for repo in config.repos:
+        s = state.get(repo.key)
+        s = s if isinstance(s, dict) else {}
+        display_status = str(s.get("display_status", "unknown"))
+
+        if display_status == "success":
+            counts["success"] += 1
+        elif display_status == "failure":
+            counts["failure"] += 1
+        elif display_status in ("in_progress", "queued"):
+            counts["running"] += 1
+        else:
+            counts["other"] += 1
+
+        commit_raw = str(s.get("head_commit_message") or "")
+        commit = commit_raw.replace("\n", " ").strip()
+
+        repos_out.append({
+            "key": repo.key,
+            "alias": repo.alias or repo.repo,
+            "group": repo.group or "default",
+            "status": display_status,
+            "branch": str(s.get("head_branch") or repo.watch_branch or ""),
+            "commit": commit,
+            "updated_at": str(s.get("updated_at") or ""),
+            "url": str(s.get("html_url") or ""),
+        })
+
+    if json_output:
+        typer.echo(_json.dumps({
+            "total": len(repos_out),
+            "passing": counts["success"],
+            "failing": counts["failure"],
+            "running": counts["running"],
+            "repos": repos_out,
+        }, indent=2))
+        return
+
+    if not repos_out:
+        typer.echo("No repositories configured.")
+        return
+
+    w_alias = max(len(r["alias"]) for r in repos_out)
+    w_status = max(len(r["status"]) for r in repos_out)
+    w_branch = max((len(r["branch"]) for r in repos_out), default=6)
+    w_age = 8
+
+    header = (
+        f"  {'ALIAS':<{w_alias}}  {'STATUS':<{w_status}}  "
+        f"{'AGE':<{w_age}}  {'BRANCH':<{w_branch}}  COMMIT"
+    )
+    typer.echo(header)
+    typer.echo("  " + "─" * (len(header) - 2))
+
+    _STATUS_COLOURS = {
+        "success": typer.colors.GREEN,
+        "failure": typer.colors.RED,
+        "in_progress": typer.colors.YELLOW,
+        "queued": typer.colors.YELLOW,
+    }
+
+    for r in repos_out:
+        st = r["status"]
+        colour = _STATUS_COLOURS.get(st)
+        status_text = typer.style(st, fg=colour) if colour else st
+        # Pad after the coloured text so columns stay aligned
+        status_padding = " " * max(0, w_status - len(st))
+
+        age = _age_short(r["updated_at"])
+        branch = r["branch"] or "—"
+        commit = r["commit"]
+        if len(commit) > 52:
+            commit = commit[:49] + "…"
+
+        typer.echo(
+            f"  {r['alias']:<{w_alias}}  {status_text}{status_padding}  "
+            f"{age:<{w_age}}  {branch:<{w_branch}}  {commit}"
+        )
+
+    typer.echo()
+    summary: list[str] = []
+    if counts["success"]:
+        summary.append(typer.style(f"{counts['success']} passing", fg=typer.colors.GREEN))
+    if counts["failure"]:
+        summary.append(typer.style(f"{counts['failure']} failing", fg=typer.colors.RED))
+    if counts["running"]:
+        summary.append(typer.style(f"{counts['running']} running", fg=typer.colors.YELLOW))
+    if counts["other"]:
+        summary.append(f"{counts['other']} other")
+    typer.echo("  " + "  ·  ".join(summary))
 
 
 def _resolve_repo_key(identifier: str) -> str | None:

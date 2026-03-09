@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -104,7 +105,12 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
     auth_raw = raw.get("auth", {})
     pat = auth_raw.get("pat", "").strip()
     if not pat:
-        raise ValueError("Config is missing [auth] pat — run `ghastly init`.")
+        pat = (os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")).strip()
+    if not pat:
+        raise ValueError(
+            "No GitHub PAT found. Set [auth] pat in config, "
+            "or export GITHUB_TOKEN / GH_TOKEN."
+        )
     auth = AuthConfig(pat=pat)
 
     # Display — optional with defaults
@@ -234,7 +240,7 @@ def append_repo_to_config(
     logger.info("Appended repo %s to config", repo.url)
 
 
-def config_to_dict(config: "Config") -> dict[str, object]:
+def config_to_dict(config: Config) -> dict[str, object]:
     """Serialise a Config object to a dict suitable for write_config."""
     repos: list[dict[str, object]] = []
     for repo in config.repos:

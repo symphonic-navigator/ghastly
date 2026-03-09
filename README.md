@@ -25,6 +25,18 @@ on state changes, and optionally parses a structured `ghastly/v1` artifact
 manifest embedded in workflow step summaries — surfacing exactly what was built
 and at what version.
 
+Each repository row shows:
+
+| Column      | Description                                                             |
+|-------------|-------------------------------------------------------------------------|
+| alias       | Display name (or repo name if no alias is set)                          |
+| branch      | Branch the latest run executed on                                       |
+| now         | `running` / `queued` if a run is currently active, otherwise `—`        |
+| last build  | Conclusion of the last completed run (success / failure / cancelled)    |
+| duration    | Duration of the last completed run, or live elapsed time while running  |
+| age         | How long ago the last completed run finished                            |
+| commit      | Commit message that triggered the run                                   |
+
 ---
 
 ## Prerequisites
@@ -228,10 +240,96 @@ The `artifact_hint` option controls how ghastly fetches artifact data:
 
 ---
 
+## CLI Commands
+
+All subcommands are available alongside the main TUI launcher.
+
+| Command                              | Description                                      |
+|--------------------------------------|--------------------------------------------------|
+| `ghastly`                            | Launch the TUI dashboard                         |
+| `ghastly init`                       | Interactive setup wizard                         |
+| `ghastly add <url>`                  | Add a repository to the watch list               |
+| `ghastly list`                       | List all watched repositories                    |
+| `ghastly delete <id>`                | Remove a repository (index, URL, or owner/repo)  |
+| `ghastly alias <id> <name>`          | Set a display alias for a repository             |
+| `ghastly set-group <id> <group>`     | Move a repository into a group                   |
+| `ghastly unset-group <id>`           | Reset a repository's group to `default`          |
+| `ghastly status`                     | Print current build status of all repos          |
+| `ghastly status --json`              | Machine-readable JSON output (see below)         |
+| `ghastly clear-cache [repo]`         | Clear cached detail / hint data                  |
+
+### `ghastly status`
+
+Reads the persisted state file — no API call, instant output:
+
+```sh
+ghastly status
+```
+
+```
+  ALIAS        STATUS    AGE       BRANCH  COMMIT
+  ─────────────────────────────────────────────────────────
+  api          success   2h 3m     main    Fix null reference in payment service
+  frontend     failure   45m       main    Update button styles
+  worker       running   0m        feat-x  Add retry logic
+
+  2 passing  ·  1 failing  ·  1 running
+```
+
+With `--json`, the output is suitable for scripting and status-bar integrations:
+
+```sh
+ghastly status --json
+```
+
+```json
+{
+  "total": 3,
+  "passing": 2,
+  "failing": 1,
+  "running": 0,
+  "repos": [
+    {
+      "key": "owner/api",
+      "alias": "api",
+      "group": "default",
+      "status": "success",
+      "branch": "main",
+      "commit": "Fix null reference in payment service",
+      "updated_at": "2026-03-09T08:12:00+00:00",
+      "url": "https://github.com/owner/api/actions/runs/123456789"
+    }
+  ]
+}
+```
+
+#### Waybar integration example
+
+```bash
+# ~/.config/waybar/scripts/ghastly-status.sh
+#!/usr/bin/env bash
+ghastly status --json | jq -r '
+  [
+    (if .failing > 0 then "\(.failing) ✗" else empty end),
+    (if .running > 0 then "\(.running) ⟳" else empty end),
+    "\(.passing) ✓"
+  ] | join("  ")
+'
+```
+
+---
+
 ## Environment Variables
 
-ghastly does not require any environment variables. The PAT and all
-configuration live in `~/.config/ghastly/config.toml`.
+The PAT can be provided via environment variable instead of (or as a fallback
+to) `~/.config/ghastly/config.toml`. ghastly checks in this order:
+
+1. `[auth] pat` in `config.toml`
+2. `GITHUB_TOKEN`
+3. `GH_TOKEN`
+
+This makes ghastly usable in shell sessions that already export the token
+(e.g. via `gh auth` or CI-style tooling) without duplicating credentials.
 
 ---
 

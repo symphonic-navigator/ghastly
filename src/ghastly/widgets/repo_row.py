@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import ClassVar
 
 from textual.app import ComposeResult
@@ -15,13 +15,22 @@ from ..api import RunData
 from ..config import RepoConfig
 
 
+def _format_duration(seconds: int) -> str:
+    """Format a duration in seconds as m:ss or h:mm:ss."""
+    mins, secs = divmod(seconds, 60)
+    hours, mins = divmod(mins, 60)
+    if hours:
+        return f"{hours}:{mins:02d}:{secs:02d}"
+    return f"{mins}:{secs:02d}"
+
+
 def _format_age(dt: datetime | None) -> str:
     """Format a datetime as a human-readable age string."""
     if dt is None:
         return "—"
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     delta = now - dt
     total_seconds = max(0, int(delta.total_seconds()))
 
@@ -77,6 +86,16 @@ class RepoRow(Widget):
         overflow: hidden hidden;
     }
 
+    RepoRow .col-duration {
+        width: 8;
+        overflow: hidden hidden;
+        color: $text-muted;
+    }
+
+    RepoRow .col-duration.duration-running {
+        color: $warning;
+    }
+
     RepoRow .col-age {
         width: 20;
         overflow: hidden hidden;
@@ -109,7 +128,7 @@ class RepoRow(Widget):
     class Selected(Message):
         """Posted when the user presses Enter on this row."""
 
-        def __init__(self, row: "RepoRow") -> None:
+        def __init__(self, row: RepoRow) -> None:
             super().__init__()
             self.row = row
 
@@ -132,6 +151,8 @@ class RepoRow(Widget):
         yield Label(now_text, classes=f"col-now {now_class}")
         last_text, last_class = self._last_build_text()
         yield Label(last_text, classes=f"col-last-build {last_class}")
+        dur_text, dur_class = self._duration_text()
+        yield Label(dur_text, classes=f"col-duration {dur_class}")
         yield Label(self._age_text(), classes="col-age")
         commit_class = "commit-error" if self.error else "commit-normal"
         yield Label(self._commit_text(), classes=f"col-commit {commit_class}")
@@ -145,8 +166,12 @@ class RepoRow(Widget):
 
     def _tick(self) -> None:
         """Called every second to refresh time-dependent labels."""
-        age_label = self.query_one(".col-age", Label)
-        age_label.update(self._age_text())
+        self.query_one(".col-age", Label).update(self._age_text())
+        if self.run and self.run.status == "in_progress":
+            dur_text, dur_class = self._duration_text()
+            dur_label = self.query_one(".col-duration", Label)
+            dur_label.update(dur_text)
+            dur_label.set_class(dur_class == "duration-running", "duration-running")
 
     # ------------------------------------------------------------------ #
     # Key handling
@@ -198,6 +223,10 @@ class RepoRow(Widget):
             last_label.add_class(last_class)
 
             self.query_one(".col-age", Label).update(self._age_text())
+            dur_text, dur_class = self._duration_text()
+            dur_label = self.query_one(".col-duration", Label)
+            dur_label.update(dur_text)
+            dur_label.set_class(dur_class == "duration-running", "duration-running")
             commit_label = self.query_one(".col-commit", Label)
             commit_label.update(self._commit_text())
             commit_label.set_class(bool(self.error), "commit-error")
@@ -273,3 +302,30 @@ class RepoRow(Widget):
         else:
             ref = self.run.updated_at or self.run.run_started_at
         return _format_age(ref)
+
+    def _duration_text(self) -> tuple[str, str]:
+        """Return (label, css-class) for the duration column.
+
+        In-progress: live elapsed time since run_started_at (updates every tick).
+        Completed: static duration = updated_at − run_started_at.
+        """
+        if self.run is None:
+            return "—", ""
+        start = self.run.run_started_at
+        if start is None:
+            return "—", ""
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+
+        if self.run.status == "in_progress":
+            elapsed = max(0, int((datetime.now(tz=UTC) - start).total_seconds()))
+            return _format_duration(elapsed), "duration-running"
+
+        if self.run.status == "completed" and self.run.updated_at:
+            end = self.run.updated_at
+            if end.tzinfo is None:
+                end = end.replace(tzinfo=UTC)
+            secs = max(0, int((end - start).total_seconds()))
+            return _format_duration(secs), ""
+
+        return "—", ""
