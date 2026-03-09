@@ -13,7 +13,9 @@ from typing import Any
 
 import httpx
 
-from .config import ETAGS_PATH, STATE_PATH
+from .config import DETAIL_CACHE_PATH, ETAGS_PATH, MANIFEST_HINTS_PATH, STATE_PATH
+from .detail_cache import DetailCache
+from .manifest_hints import ManifestHints
 from .schema import ArtifactManifest, parse_manifest_json
 
 logger = logging.getLogger(__name__)
@@ -419,11 +421,23 @@ class GitHubClient:
 
         return merged
 
-    async def get_step_summary(self, owner: str, repo: str, run_id: int) -> str | None:
+    async def get_step_summary(
+        self,
+        owner: str,
+        repo: str,
+        run_id: int,
+        *,
+        hint_job_name: str | None = None,
+    ) -> tuple[str | None, str | None]:
         """Fetch the step summary markdown for a run, if available.
 
-        Iterates all jobs for the run, then fetches each job's check-run output
-        via the check-runs API.  Returns the first non-empty summary found, or None.
+        When ``hint_job_name`` is provided, that job is tried first before
+        iterating all jobs — significantly reducing API calls for repos with
+        many jobs (e.g. monorepos).
+
+        Returns ``(summary_text, job_name)`` where *job_name* is the name of
+        the job that contained the summary (for updating the hint), or
+        ``(None, None)`` if no summary was found.
         """
         if not self._client:
             raise RuntimeError("Client not initialised — use async context manager")
@@ -434,30 +448,55 @@ class GitHubClient:
             resp = await self._client.get(jobs_url, params={"per_page": 100})
         except httpx.RequestError as exc:
             logger.warning("Network error fetching jobs for run %s: %s", run_id, exc)
-            return None
+            return None, None
 
         if resp.status_code != 200:
             logger.warning("Unexpected status %s fetching jobs for run %s", resp.status_code, run_id)
-            return None
+            return None, None
 
         jobs = resp.json().get("jobs", [])
+
+        # If we have a hint, try that job first
+        if hint_job_name:
+            for job in jobs:
+                if job.get("name") == hint_job_name:
+                    result = await self._fetch_job_summary(owner, repo, job.get("id"))
+                    if result:
+                        return result, hint_job_name
+                    break  # Hint job found but no summary — fall through
+
+        # Full iteration (skipping hinted job if already tried)
         for job in jobs:
+            job_name = job.get("name", "")
+            if hint_job_name and job_name == hint_job_name:
+                continue  # Already tried above
             job_id = job.get("id")
             if not job_id:
                 continue
-            check_url = f"/repos/{owner}/{repo}/check-runs/{job_id}"
-            logger.debug("GET %s", check_url)
-            try:
-                check_resp = await self._client.get(check_url)
-            except httpx.RequestError as exc:
-                logger.warning("Network error fetching check-run %s: %s", job_id, exc)
-                continue
-            if check_resp.status_code != 200:
-                continue
-            summary = check_resp.json().get("output", {}).get("summary")
-            if summary:
-                return str(summary)
+            result = await self._fetch_job_summary(owner, repo, job_id)
+            if result:
+                return result, job_name
 
+        return None, None
+
+    async def _fetch_job_summary(
+        self, owner: str, repo: str, job_id: int | None
+    ) -> str | None:
+        """Fetch the check-run summary for a single job. Returns summary text or None."""
+        if not job_id or not self._client:
+            return None
+        check_url = f"/repos/{owner}/{repo}/check-runs/{job_id}"
+        logger.debug("GET %s", check_url)
+        try:
+            check_resp = await self._client.get(check_url)
+        except httpx.RequestError as exc:
+            logger.warning("Network error fetching check-run %s: %s", job_id, exc)
+            return None
+        if check_resp.status_code != 200:
+            return None
+        summary = check_resp.json().get("output", {}).get("summary")
+        if summary:
+            return str(summary)
         return None
 
     async def get_latest_release(self, owner: str, repo: str) -> str | None:
