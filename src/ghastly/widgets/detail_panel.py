@@ -212,6 +212,45 @@ class DetailPanel(Widget):
                 id="dp-release",
             ))
 
+    async def update_for_run(self, repo: RepoConfig, run: RunData) -> None:
+        """Switch the panel to show a different repo/run.
+
+        Removes existing content, updates internal state, and triggers a
+        fresh data load (which will hit the cache if available).
+        """
+        self._repo = repo
+        self._run = run
+        self._manifest = None
+        self._summary_text = None
+        self._release_tag = None
+
+        # Update title
+        alias = repo.alias or repo.repo
+        branch = run.head_branch or repo.watch_branch or "—"
+        try:
+            self.query_one("#dp-title", Label).update(f"{alias}  ·  {branch}")
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Remove existing content widgets
+        for widget_id in ("#dp-artifact-table", "#dp-summary", "#dp-release", "#dp-loading-container"):
+            try:
+                await self.query_one(widget_id).remove()
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Show loading indicator and start data load
+        container = Middle(id="dp-loading-container")
+        await self.mount(container)
+        center1 = Center()
+        await container.mount(center1)
+        await center1.mount(LoadingIndicator(id="dp-loading"))
+        center2 = Center()
+        await container.mount(center2)
+        await center2.mount(Label("Fetching build details…", id="dp-loading-label"))
+
+        self._load_data()
+
     def open_browser(self) -> None:
         if self._run.html_url:
             logger.debug("Opening browser: %s", self._run.html_url)

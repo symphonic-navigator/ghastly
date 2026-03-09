@@ -566,6 +566,19 @@ class GhastlyApp(App[None]):
         new_idx = (idx + delta) % len(widgets)
         widgets[new_idx].focus()
 
+        # Update detail panel to follow cursor in split mode
+        new_widget = widgets[new_idx]
+        if (
+            self._split_mode
+            and self._detail_panel is not None
+            and isinstance(new_widget, RepoRow)
+            and new_widget.run is not None
+        ):
+            self.run_worker(
+                self._detail_panel.update_for_run(new_widget.repo, new_widget.run),
+                exclusive=True,
+            )
+
     # ------------------------------------------------------------------ #
     # Detail panel
     # ------------------------------------------------------------------ #
