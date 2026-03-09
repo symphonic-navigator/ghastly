@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import webbrowser
 from typing import ClassVar
@@ -139,7 +140,10 @@ class DetailPanel(Widget):
         try:
             self._manifest = await self._client.get_manifest_from_artifact(owner, repo, run_id)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Error fetching manifest artifact for %s/%s run %s: %s", owner, repo, run_id, exc)
+            logger.warning(
+                "Error fetching manifest artifact for %s/%s run %s: %s",
+                owner, repo, run_id, exc,
+            )
 
         # 3. Step summary with hint
         hint = self._client.manifest_hints.get_summary_job(repo_key)
@@ -150,7 +154,10 @@ class DetailPanel(Widget):
             if job_name:
                 self._client.manifest_hints.set_summary_job(repo_key, job_name)
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Error fetching step summary for %s/%s run %s: %s", owner, repo, run_id, exc)
+            logger.warning(
+                "Error fetching step summary for %s/%s run %s: %s",
+                owner, repo, run_id, exc,
+            )
 
         if not self._manifest and self._summary_text:
             self._manifest = extract_manifest(self._summary_text)
@@ -168,7 +175,9 @@ class DetailPanel(Widget):
             import json as _json
             manifest_json = _json.dumps({
                 "schema": self._manifest.schema,
-                "built_at": self._manifest.built_at.isoformat() if self._manifest.built_at else None,
+                "built_at": (
+                    self._manifest.built_at.isoformat() if self._manifest.built_at else None
+                ),
                 "trigger": self._manifest.trigger,
                 "artifacts": [
                     {"name": a.name, "type": a.type, "version": a.version, "ref": a.ref}
@@ -227,17 +236,16 @@ class DetailPanel(Widget):
         # Update title
         alias = repo.alias or repo.repo
         branch = run.head_branch or repo.watch_branch or "—"
-        try:
+        with contextlib.suppress(Exception):
             self.query_one("#dp-title", Label).update(f"{alias}  ·  {branch}")
-        except Exception:  # noqa: BLE001
-            pass
 
         # Remove existing content widgets
-        for widget_id in ("#dp-artifact-table", "#dp-summary", "#dp-release", "#dp-loading-container"):
-            try:
+        content_ids = (
+            "#dp-artifact-table", "#dp-summary", "#dp-release", "#dp-loading-container",
+        )
+        for widget_id in content_ids:
+            with contextlib.suppress(Exception):
                 await self.query_one(widget_id).remove()
-            except Exception:  # noqa: BLE001
-                pass
 
         # Show loading indicator and start data load
         container = Middle(id="dp-loading-container")
